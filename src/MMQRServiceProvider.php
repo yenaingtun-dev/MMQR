@@ -12,6 +12,10 @@ class MMQRServiceProvider extends ServiceProvider
             __DIR__.'/../config/mmqr.php',
             'mmqr'
         );
+
+        $this->app->singleton(MMQRService::class, function ($app) {
+            return new MMQRService($app['config']['mmqr']);
+        });
     }
 
     public function boot(): void
