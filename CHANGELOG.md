@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.3.0 - 2026-06-24
+
+### Changed
+
+- Simplified `qrPayment()` logging to one log per call — success logs `tx` only, failures log `tx` and `message`
+- Removed verbose logs that dumped request bodies, tokens, and raw API responses
+- Removed logging from `getUserToken()`; payment outcomes are logged only in `qrPayment()`
+- `qrPayment()` now treats API responses with `err !== 200` as failures and logs them
+- Reorganized `MMQRService` methods to match the API flow: QR payment → access token → user token → encryption → helpers
+- Added section comments and docblocks to `MMQRService`
+
+### Added
+
+- `paymentFailed()` internal helper for unified error logging and response shaping
+- Unit test assertions for payment success and failure logging
+
+### Security
+
+- Tokens and sensitive response bodies are no longer written to logs
+
 ## 0.2.0 - 2026-06-22
 
 ### Added
