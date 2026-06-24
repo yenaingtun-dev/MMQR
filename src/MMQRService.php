@@ -11,50 +11,54 @@ class MMQRService
         protected array $config
     ) {}
 
+    // -------------------------------------------------------------------------
+    // QR payment
+    // -------------------------------------------------------------------------
+
+    /**
+     * Request a MMQR payment QR code from AYA Pay.
+     *
+     * Flow: access token → user token → QR request.
+     */
     public function qrPayment(array $data): array
     {
+        $tx = $data['externalTransactionId'];
         $envConfig = $this->configForEnvironment();
 
         $body = [
             'amount' => $data['amount'],
-            'externalTransactionId' => $data['externalTransactionId'],
+            'externalTransactionId' => $tx,
             'MMQR' => true,
             'currency' => $this->config['currency'],
             'serviceCode' => $envConfig['service_code_qr'],
         ];
 
+        // 1. Access token (client credentials)
         $accessToken = $this->getAccessToken()['access_token'] ?? null;
         if (! $accessToken) {
-            return [
-                'err' => 500,
-                'message' => 'Access token not found in response.',
-            ];
+            return $this->paymentFailed($tx, 'Access token not found in response.');
         }
 
+        // 2. User token (merchant login)
         $userTokenResponse = $this->getUserToken();
         if (is_string($userTokenResponse)) {
-            return [
-                'err' => 500,
-                'message' => 'Failed to get user token: '.$userTokenResponse,
-            ];
+            return $this->paymentFailed($tx, 'Failed to get user token: '.$userTokenResponse);
         }
 
         if (isset($userTokenResponse['err'])) {
-            return $userTokenResponse;
+            return $this->paymentFailed(
+                $tx,
+                $userTokenResponse['message'] ?? 'User token request failed.',
+                $userTokenResponse
+            );
         }
 
         $userToken = $userTokenResponse['token']['token'] ?? null;
         if (! $userToken) {
-            return [
-                'err' => 500,
-                'message' => 'User token not found in response.',
-            ];
+            return $this->paymentFailed($tx, 'User token not found in response.');
         }
 
-        Log::info('AYA QR Request Body', ['body' => $body]);
-        Log::info('AYA QR User Token', ['user_token' => $userToken]);
-        Log::info('AYA QR Access Token', ['access_token' => $accessToken]);
-
+        // 3. QR payment request
         $response = Http::withHeaders([
             'Content-Type' => 'application/json',
             'Accept-Language' => 'en',
@@ -62,14 +66,48 @@ class MMQRService
             'Token' => 'Bearer '.$accessToken,
         ])->asJson()->post($envConfig['qr_url'], $body);
 
-        Log::info('AYA QR Response', ['response' => $response->body()]);
+        $result = $response->json();
+        if ($result === null) {
+            return $this->paymentFailed($tx, 'Invalid response from AYA Pay.');
+        }
 
-        return $response->json() ?? [
-            'err' => 500,
-            'message' => 'Invalid response from AYA Pay.',
-        ];
+        if (($result['err'] ?? null) !== 200) {
+            return $this->paymentFailed(
+                $tx,
+                $result['message'] ?? 'Payment request failed.',
+                $result
+            );
+        }
+
+        Log::info('MMQR payment ok', ['tx' => $tx]);
+
+        return $result;
     }
 
+    // -------------------------------------------------------------------------
+    // Authentication (access token → user token)
+    // -------------------------------------------------------------------------
+
+    /**
+     * OAuth client-credentials token. Required before user login and QR requests.
+     */
+    public function getAccessToken(): array
+    {
+        $envConfig = $this->configForEnvironment();
+
+        $response = Http::withHeaders([
+            'Content-Type' => 'application/x-www-form-urlencoded',
+            'Authorization' => 'Basic '.$this->base64Credentials(),
+        ])->asForm()->post($envConfig['access_token_url'], [
+            'grant_type' => 'client_credentials',
+        ]);
+
+        return $response->json() ?? [];
+    }
+
+    /**
+     * Merchant login token. Uses the access token in the Token header.
+     */
     public function getUserToken(): array|string
     {
         $envConfig = $this->configForEnvironment();
@@ -110,24 +148,12 @@ class MMQRService
             return $response->json();
         }
 
-        Log::error('Error occurred while requesting MMQR user token: '.$response->body());
-
         return $response->body();
     }
 
-    public function getAccessToken(): array
-    {
-        $envConfig = $this->configForEnvironment();
-
-        $response = Http::withHeaders([
-            'Content-Type' => 'application/x-www-form-urlencoded',
-            'Authorization' => 'Basic '.$this->base64Credentials(),
-        ])->asForm()->post($envConfig['access_token_url'], [
-            'grant_type' => 'client_credentials',
-        ]);
-
-        return $response->json() ?? [];
-    }
+    // -------------------------------------------------------------------------
+    // Encryption (callbacks / webhooks)
+    // -------------------------------------------------------------------------
 
     public function encrypt(string $data, ?string $key = null): string
     {
@@ -158,6 +184,17 @@ class MMQRService
         }
 
         return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal helpers
+    // -------------------------------------------------------------------------
+
+    protected function paymentFailed(string $tx, string $message, ?array $response = null): array
+    {
+        Log::error('MMQR payment failed', ['tx' => $tx, 'message' => $message]);
+
+        return $response ?? ['err' => 500, 'message' => $message];
     }
 
     protected function configForEnvironment(): array

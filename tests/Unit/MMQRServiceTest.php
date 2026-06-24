@@ -2,6 +2,8 @@
 
 namespace YenaingtunDev\MMQR\Tests\Unit;
 
+use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use YenaingtunDev\MMQR\MMQRService;
 use YenaingtunDev\MMQR\Tests\TestCase;
@@ -68,6 +70,11 @@ class MMQRServiceTest extends TestCase
 
     public function test_qr_payment_returns_qr_data(): void
     {
+        $logged = [];
+        Event::listen(MessageLogged::class, function (MessageLogged $event) use (&$logged) {
+            $logged[] = $event;
+        });
+
         Http::fake([
             'https://example.test/token' => Http::response([
                 'access_token' => 'test-access-token',
@@ -91,10 +98,23 @@ class MMQRServiceTest extends TestCase
 
         $this->assertSame(200, $response['err']);
         $this->assertSame('000201010212...', $response['data']['qrdata']);
+
+        $this->assertCount(1, $logged);
+        $this->assertSame('info', $logged[0]->level);
+        $this->assertSame('MMQR payment ok', $logged[0]->message);
+        $this->assertSame('ORD-001', $logged[0]->context['tx']);
+        $this->assertArrayNotHasKey('user_token', $logged[0]->context);
+        $this->assertArrayNotHasKey('access_token', $logged[0]->context);
+        $this->assertArrayNotHasKey('body', $logged[0]->context);
     }
 
     public function test_qr_payment_returns_error_when_user_token_missing(): void
     {
+        $logged = [];
+        Event::listen(MessageLogged::class, function (MessageLogged $event) use (&$logged) {
+            $logged[] = $event;
+        });
+
         Http::fake([
             'https://example.test/token' => Http::response([
                 'access_token' => 'test-access-token',
@@ -111,5 +131,11 @@ class MMQRServiceTest extends TestCase
 
         $this->assertSame(500, $response['err']);
         $this->assertSame('User token not found in response.', $response['message']);
+
+        $this->assertCount(1, $logged);
+        $this->assertSame('error', $logged[0]->level);
+        $this->assertSame('MMQR payment failed', $logged[0]->message);
+        $this->assertSame('ORD-001', $logged[0]->context['tx']);
+        $this->assertSame('User token not found in response.', $logged[0]->context['message']);
     }
 }
